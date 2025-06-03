@@ -1,5 +1,5 @@
 {
-    "name": "saleh7/php-zatca-xml",
+    "name": "spacemudd/php-zatca-xml",
     "description": "An unofficial PHP library for generating ZATCA Fatoora e-invoices. This library facilitates the creation of compliant e-invoices, QR Codes, and certificates, as well as the submission of e-invoices to ZATCA's servers. It provides developers with an easy-to-use, customizable, and robust toolkit to integrate and automate ZATCA e-invoicing processes in PHP applications.",
     "keywords": [
         "ZATCA",
