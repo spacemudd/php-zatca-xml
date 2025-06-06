@@ -94,6 +94,31 @@ class ZatcaApiException extends ZatcaException
         return implode("\n", $messages);
     }
 
+    /**
+     * Get the response body from the API call.
+     *
+     * @return string
+     */
+    public function getResponseBody(): string
+    {
+        return $this->responseBody;
+    }
+
+    /**
+     * Get the HTTP status code from the API call.
+     *
+     * @return int
+     */
+    public function getStatusCode(): int
+    {
+        return $this->statusCode;
+    }
+
+    /**
+     * Get the validation results if any.
+     *
+     * @return array
+     */
     public function getValidationResults(): array
     {
         return $this->validationResults;

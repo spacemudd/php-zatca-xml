@@ -96,18 +96,47 @@ class ZatcaAPI
      */
     public function requestComplianceCertificate(string $csr, string $otp): ComplianceCertificateResult
     {
-        $response = $this->sendRequest(
-            'POST',
-            '/compliance',
-            ['OTP' => $otp],
-            ['csr' => base64_encode($csr)]
-        );
+        try {
+            $response = $this->sendRequest(
+                'POST',
+                '/compliance',
+                [
+                    'OTP' => $otp,
+                    'Accept' => '*/*'  // Accept any content type
+                ],
+                ['csr' => base64_encode($csr)]
+            );
 
-        return new ComplianceCertificateResult(
-            $this->formatCertificate($response['binarySecurityToken'] ?? ''),
-            $response['secret'] ?? '',
-            $response['requestID'] ?? ''
-        );
+            // Handle both JSON and binary responses
+            $certificate = $response['binarySecurityToken'] ?? '';
+            $secret = $response['secret'] ?? '';
+            $requestId = $response['requestID'] ?? '';
+
+            if (empty($certificate) || empty($secret)) {
+                throw new ZatcaApiException(
+                    'Invalid compliance certificate response: missing required fields',
+                    0,
+                    json_encode($response)
+                );
+            }
+
+            return new ComplianceCertificateResult(
+                $this->formatCertificate($certificate),
+                $secret,
+                $requestId
+            );
+        } catch (ZatcaApiException $e) {
+            // Just rethrow the original exception
+            throw $e;
+        } catch (\Exception $e) {
+            // Wrap other exceptions
+            throw new ZatcaApiException(
+                'Failed to request compliance certificate: ' . $e->getMessage(),
+                0,
+                '',
+                $e
+            );
+        }
     }
 
     /**
@@ -252,19 +281,34 @@ class ZatcaAPI
                 'headers' => $mergedHeaders,
                 'json'    => $payload,
                 'http_errors' => false, // Don't throw exceptions for HTTP errors
+                'debug' => true, // Enable debug output
             ];
+
+            // Log request details
+            error_log("ZATCA Request - URL: " . $this->getBaseUri() . $endpoint);
+            error_log("ZATCA Request - Headers: " . json_encode($mergedHeaders));
+            error_log("ZATCA Request - Payload: " . json_encode($payload));
 
             // Use the base URI from the current environment
             $url = $this->getBaseUri() . $endpoint;
             
             $response = $this->httpClient->request($method, $url, $options);
             $statusCode = $response->getStatusCode();
-            $body = (string) $response->getBody();
             
+            // Log response details
+            error_log("ZATCA Response - Status Code: " . $statusCode);
+            error_log("ZATCA Response - Headers: " . json_encode($response->getHeaders()));
+            
+            $body = (string) $response->getBody();
+            error_log("ZATCA Response - Body: " . $body);
+            
+            // Reset body pointer
+            $response->getBody()->rewind();
+
             // If it's not a success response, throw an exception with the full response
             if (!$this->isSuccessfulResponse($statusCode)) {
                 throw new ZatcaApiException(
-                    "ZATCA API request failed",
+                    "ZATCA API request failed with status {$statusCode}",
                     $statusCode,
                     $body
                 );
@@ -275,6 +319,9 @@ class ZatcaAPI
             $response = $e->getResponse();
             $body = $response ? (string) $response->getBody() : '';
             $code = $response ? $response->getStatusCode() : 0;
+            
+            error_log("ZATCA Error - Message: " . $e->getMessage());
+            error_log("ZATCA Error - Response Body: " . $body);
 
             throw new ZatcaApiException(
                 "ZATCA API request failed: {$e->getMessage()}",
@@ -303,11 +350,48 @@ class ZatcaAPI
      */
     private function parseResponse(ResponseInterface $response): array
     {
-        $content = $response->getBody()->getContents();
-        $data    = json_decode($content, true);
+        $body = (string) $response->getBody();
+        $contentType = $response->getHeaderLine('Content-Type');
+        
+        error_log("ZATCA Parse - Content Type: " . $contentType);
+        error_log("ZATCA Parse - Body Length: " . strlen($body));
+        
+        // Check if response is empty
+        if (empty($body)) {
+            $msg = sprintf(
+                "Empty response received from ZATCA API. Status: %d, Headers: %s",
+                $response->getStatusCode(),
+                json_encode($response->getHeaders())
+            );
+            throw new ZatcaApiException($msg);
+        }
 
+        // For compliance certificate request, check if it's binary data
+        if (strpos($contentType, 'application/json') === false) {
+            // Try to extract information from headers
+            $secret = $response->getHeaderLine('X-API-Secret');
+            $requestId = $response->getHeaderLine('X-Request-ID');
+            
+            error_log("ZATCA Parse - Found Secret Header: " . ($secret ? 'Yes' : 'No'));
+            error_log("ZATCA Parse - Found Request ID Header: " . ($requestId ? 'Yes' : 'No'));
+
+            return [
+                'binarySecurityToken' => base64_encode($body),
+                'secret' => $secret,
+                'requestID' => $requestId
+            ];
+        }
+
+        // Try to decode JSON
+        $data = json_decode($body, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new ZatcaApiException('Failed to parse API response: ' . json_last_error_msg());
+            throw new ZatcaApiException(
+                sprintf(
+                    'Failed to parse JSON response: %s. Response content: %s',
+                    json_last_error_msg(),
+                    substr($body, 0, 255)
+                )
+            );
         }
 
         return $data;
