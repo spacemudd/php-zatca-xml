@@ -251,28 +251,37 @@ class ZatcaAPI
             $options = [
                 'headers' => $mergedHeaders,
                 'json'    => $payload,
+                'http_errors' => false, // Don't throw exceptions for HTTP errors
             ];
 
-            // استخدام عنوان URL المبني على البيئة الحالية
+            // Use the base URI from the current environment
             $url = $this->getBaseUri() . $endpoint;
-
+            
             $response = $this->httpClient->request($method, $url, $options);
             $statusCode = $response->getStatusCode();
-
+            $body = (string) $response->getBody();
+            
+            // If it's not a success response, throw an exception with the full response
             if (!$this->isSuccessfulResponse($statusCode)) {
-                throw new ZatcaApiException(null, [
-                    'endpoint' => $endpoint,
-                    'options'  => $options,
-                    'response' => $this->parseResponse($response),
-                ]);
+                throw new ZatcaApiException(
+                    "ZATCA API request failed",
+                    $statusCode,
+                    $body
+                );
             }
 
             return $this->parseResponse($response);
         } catch (GuzzleException $e) {
-            throw new ZatcaApiException('HTTP request failed', [
-                'message'  => $e->getMessage(),
-                'endpoint' => $endpoint,
-            ], $e->getCode(), $e);
+            $response = $e->getResponse();
+            $body = $response ? (string) $response->getBody() : '';
+            $code = $response ? $response->getStatusCode() : 0;
+
+            throw new ZatcaApiException(
+                "ZATCA API request failed: {$e->getMessage()}",
+                $code,
+                $body,
+                $e
+            );
         }
     }
 
