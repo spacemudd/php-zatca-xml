@@ -312,7 +312,7 @@ class ZatcaAPI
                 'headers' => $mergedHeaders,
                 'json'    => $payload,
                 'http_errors' => false, // Don't throw exceptions for HTTP errors
-                'debug' => true, // Enable debug output
+                'debug' => false, // Enable debug output
             ];
 
             // Log request details
@@ -322,17 +322,17 @@ class ZatcaAPI
 
             // Use the base URI from the current environment
             $url = $this->getBaseUri() . $endpoint;
-            
+
             $response = $this->httpClient->request($method, $url, $options);
             $statusCode = $response->getStatusCode();
-            
+
             // Log response details
             error_log("ZATCA Response - Status Code: " . $statusCode);
             error_log("ZATCA Response - Headers: " . json_encode($response->getHeaders()));
-            
+
             $body = (string) $response->getBody();
             error_log("ZATCA Response - Body: " . $body);
-            
+
             // Reset body pointer
             $response->getBody()->rewind();
 
@@ -350,7 +350,7 @@ class ZatcaAPI
             $response = $e->getResponse();
             $body = $response ? (string) $response->getBody() : '';
             $code = $response ? $response->getStatusCode() : 0;
-            
+
             error_log("ZATCA Error - Message: " . $e->getMessage());
             error_log("ZATCA Error - Response Body: " . $body);
 
@@ -383,10 +383,10 @@ class ZatcaAPI
     {
         $body = (string) $response->getBody();
         $contentType = $response->getHeaderLine('Content-Type');
-        
+
         error_log("ZATCA Parse - Content Type: " . $contentType);
         error_log("ZATCA Parse - Body Length: " . strlen($body));
-        
+
         // Check if response is empty
         if (empty($body)) {
             $msg = sprintf(
@@ -402,7 +402,7 @@ class ZatcaAPI
             // Try to extract information from headers
             $secret = $response->getHeaderLine('X-API-Secret');
             $requestId = $response->getHeaderLine('X-Request-ID');
-            
+
             error_log("ZATCA Parse - Found Secret Header: " . ($secret ? 'Yes' : 'No'));
             error_log("ZATCA Parse - Found Request ID Header: " . ($requestId ? 'Yes' : 'No'));
 
@@ -465,5 +465,5 @@ class ZatcaAPI
 
         (new Storage)->put($filePath, $json);
     }
-    
+
 }
