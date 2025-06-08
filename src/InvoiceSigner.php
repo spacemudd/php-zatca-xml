@@ -40,8 +40,8 @@ class InvoiceSigner
         $xmlDom->removeParentByXpath('cac:AdditionalDocumentReference/cbc:ID[. = "QR"]');
 
         // Compute hash using SHA-256
-        $invoiceHashBinary = hash('sha256', $xmlDom->getElement()->C14N(false, false), true);
-        $instance->hash = base64_encode($invoiceHashBinary);
+        $invoiceHashBinary = hash('sha256', $xmlDom->getElement()->C14N(true, false), true);
+        $invoiceHashBase64 = base64_encode($invoiceHashBinary);
 
         // Create digital signature using the private key
         $instance->digitalSignature = base64_encode(
@@ -51,33 +51,79 @@ class InvoiceSigner
         // Prepare UBL Extension with certificate, hash, and signature
         $ublExtension = (new InvoiceSignatureBuilder)
             ->setCertificate($certificate)
-            ->setInvoiceDigest($instance->hash)
+            ->setInvoiceDigest($invoiceHashBase64)
             ->setSignatureValue($instance->digitalSignature)
             ->buildSignatureXml();
 
         // Generate QR Code
         $instance->qrCode = QRCodeGenerator::createFromTags(
-            $xmlDom->generateQrTagsArray($certificate, $instance->hash, $instance->digitalSignature)
+            $xmlDom->generateQrTagsArray($certificate, $invoiceHashBase64, $instance->digitalSignature)
         )->encodeBase64();
 
+        // Insert UBL extensions and QR code into original XML
+        $finalSignedXml = self::insertExtensionsAndQr($xmlInvoice, $ublExtension, $instance->qrCode);
+        $instance->signedInvoice = $finalSignedXml;
 
-        // Insert UBL Extension and QR Code into the XML
-        $signedInvoice = str_replace(
-            [
-                "<cbc:ProfileID>",
-                '<cac:AccountingSupplierParty>',
-            ],
-            [
-                "<ext:UBLExtensions>" . $ublExtension . "</ext:UBLExtensions>" . PHP_EOL . "    <cbc:ProfileID>",
-                $instance->getQRNode($instance->qrCode) . PHP_EOL . "    <cac:AccountingSupplierParty>",
-            ],
-            $xmlDom->toXml()
-        );
-
-        // Remove extra blank lines and save
-        $instance->signedInvoice = preg_replace('/^[ \t]*[\r\n]+/m', '', $signedInvoice);
+        // Calculate FINAL invoice hash exactly like ZATCA will:
+        $instance->hash = self::calculateZatcaInvoiceHash($finalSignedXml);
 
         return $instance;
+    }
+
+    /**
+     * @param string $xmlInvoice
+     * @param string $ublExtension
+     * @param string $qrCode
+     * @return string
+     */
+    private static function insertExtensionsAndQr(string $xmlInvoice, string $ublExtension, string $qrCode): string
+    {
+        // Insert into XML by string replacement (same as your original logic)
+        $signedInvoice = str_replace(
+            [
+                '<cbc:ProfileID>',
+                '<cac:AccountingSupplierParty>'],
+            [
+                "<ext:UBLExtensions>$ublExtension</ext:UBLExtensions>\n    <cbc:ProfileID>",
+                self::getQRNode($qrCode) . "\n    <cac:AccountingSupplierParty>"
+            ],
+            $xmlInvoice
+        );
+
+        return preg_replace('/^[ \t]*[\r\n]+/m', '', $signedInvoice);
+    }
+
+    /**
+     * @param string $signedXml
+     * @return string
+     */
+    private static function calculateZatcaInvoiceHash(string $signedXml): string
+    {
+        $doc = new \DOMDocument();
+        //$doc->preserveWhiteSpace = false; // ZATCA compliance fails if this is true.
+        $doc->formatOutput = false;
+        $doc->loadXML($signedXml);
+
+        $xpath = new \DOMXPath($doc);
+        $xpath->registerNamespace('ext', 'urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2');
+        $xpath->registerNamespace('cac', 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2');
+        $xpath->registerNamespace('cbc', 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2');
+
+        $nodesToRemove = [
+            '//ext:UBLExtensions',
+            '//cac:Signature',
+            '//cac:AdditionalDocumentReference[cbc:ID="QR"]'
+        ];
+
+        foreach ($nodesToRemove as $query) {
+            $nodes = $xpath->query($query);
+            foreach ($nodes as $node) {
+                $node->parentNode->removeChild($node);
+            }
+        }
+
+        $canonical = $doc->C14N(false, false); // exclusive being true will fail compliance test.
+        return base64_encode(hash('sha256', $canonical, true));
     }
 
     /**
@@ -110,19 +156,20 @@ class InvoiceSigner
      * @param string $QRCode
      * @return string
      */
-    private function getQRNode(string $QRCode): string
+    private static function getQRNode(string $QRCode): string
     {
         return "<cac:AdditionalDocumentReference>
-        <cbc:ID>QR</cbc:ID>
-        <cac:Attachment>
-            <cbc:EmbeddedDocumentBinaryObject mimeCode=\"text/plain\">$QRCode</cbc:EmbeddedDocumentBinaryObject>
-        </cac:Attachment>
-    </cac:AdditionalDocumentReference>
-    <cac:Signature>
-        <cbc:ID>urn:oasis:names:specification:ubl:signature:Invoice</cbc:ID>
-        <cbc:SignatureMethod>urn:oasis:names:specification:ubl:dsig:enveloped:xades</cbc:SignatureMethod>
-    </cac:Signature>";
+            <cbc:ID>QR</cbc:ID>
+            <cac:Attachment>
+                <cbc:EmbeddedDocumentBinaryObject mimeCode=\"text/plain\">$QRCode</cbc:EmbeddedDocumentBinaryObject>
+            </cac:Attachment>
+        </cac:AdditionalDocumentReference>
+        <cac:Signature>
+            <cbc:ID>urn:oasis:names:specification:ubl:signature:Invoice</cbc:ID>
+            <cbc:SignatureMethod>urn:oasis:names:specification:ubl:dsig:enveloped:xades</cbc:SignatureMethod>
+        </cac:Signature>";
     }
+
     /**
      * Get signed invoice XML.
      *
