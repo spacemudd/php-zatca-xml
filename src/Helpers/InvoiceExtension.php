@@ -325,36 +325,48 @@ class InvoiceExtension
      */
     public function generateQrTagsArray(Certificate $certificate, ?string $invoiceDigest, ?string $signatureValue): array
     {
-        if (!$invoiceDigest) {
-            $invoiceDigest = $this->computeXmlDigest();
+        // Check if this is a simplified invoice by examining the InvoiceTypeCode's name attribute
+        // This is critical for ZATCA compatibility
+        $invoiceTypeCodeNode = $this->find("cbc:InvoiceTypeCode");
+        $isSimplified = false;
+        
+        if ($invoiceTypeCodeNode) {
+            $nameAttr = $invoiceTypeCodeNode->getElement()->getAttribute('name');
+            $isSimplified = str_starts_with($nameAttr, "02");
         }
-
-        if (!$signatureValue) {
-            $signatureValue = base64_encode($certificate->getPrivateKey()->sign(base64_decode($invoiceDigest)));
-        }
-
+        
         $issueDate = $this->find("cbc:IssueDate")->toText();
         $issueTime = $this->find("cbc:IssueTime")->toText();
         $issueTime = stripos($issueTime, 'Z') === false ? $issueTime . 'Z' : $issueTime;
 
+        // Create the base QR tags without the hash and signature initially
         $qrTags = [
             new Seller($this->find("cac:AccountingSupplierParty/cac:Party/cac:PartyLegalEntity/cbc:RegistrationName")->toText()),
             new TaxNumber($this->find("cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID")->toText()),
             new InvoiceDate($issueDate . 'T' . $issueTime),
             new InvoiceTotalAmount($this->find("cac:LegalMonetaryTotal/cbc:TaxInclusiveAmount")->toText()),
-            new InvoiceTaxAmount($this->find("cac:TaxTotal")->toText()),
-            new InvoiceHash($invoiceDigest),
-            new InvoiceDigitalSignature($signatureValue),
-            new PublicKey(base64_decode($certificate->getRawPublicKey()))
+            new InvoiceTaxAmount($this->find("cac:TaxTotal/cbc:TaxAmount")->toText()),
         ];
+        
+        // Now compute or use the provided digest
+        if (!$invoiceDigest) {
+            $invoiceDigest = $this->computeXmlDigest($isSimplified);
+        }
 
-        // For Simplified Tax Invoices, add the certificate signature.
-        $invoiceTypeCodeNode = $this->find("cbc:InvoiceTypeCode");
-        $isSimplified = $invoiceTypeCodeNode && str_starts_with($invoiceTypeCodeNode->getElement()->getAttribute('name'), "02");
-
+        if (!$signatureValue) {
+            $signatureValue = base64_encode($certificate->getPrivateKey()->sign(base64_decode($invoiceDigest)));
+        }
+        
+        // For Simplified Tax Invoices, add the certificate signature BEFORE the hash
+        // This order is critical for ZATCA validation of simplified invoices
         if ($isSimplified) {
             $qrTags[] = new CertificateSignature($certificate->getCertSignature());
         }
+        
+        // Add the hash and signature
+        $qrTags[] = new InvoiceHash($invoiceDigest);
+        $qrTags[] = new InvoiceDigitalSignature($signatureValue);
+        $qrTags[] = new PublicKey(base64_decode($certificate->getRawPublicKey()));
 
         return $qrTags;
     }
@@ -362,18 +374,32 @@ class InvoiceExtension
     /**
      * Compute the Base64-encoded XML digest.
      *
+     * @param bool $isSimplified Whether this is a simplified invoice
      * @return string The Base64-encoded digest.
      */
-    public function computeXmlDigest(): string
+    public function computeXmlDigest(bool $isSimplified = false): string
     {
+        // If not explicitly provided, check the invoice itself to determine if it's simplified
+        if (!$isSimplified) {
+            $invoiceTypeCodeNode = $this->find("cbc:InvoiceTypeCode");
+            if ($invoiceTypeCodeNode) {
+                $nameAttr = $invoiceTypeCodeNode->getElement()->getAttribute('name');
+                $isSimplified = str_starts_with($nameAttr, "02");
+            }
+        }
+        
         $clonedXml = clone $this;
 
-        // Remove unwanted elements for digest computation.
+        // Remove unwanted elements for digest computation - exactly as specified by ZATCA
         $clonedXml->removeByXpath('ext:UBLExtensions');
         $clonedXml->removeByXpath('cac:Signature');
         $clonedXml->removeParentByXpath('cac:AdditionalDocumentReference/cbc:ID[. = "QR"]');
 
-        return base64_encode(hash('sha256', $clonedXml->getElement()->C14N(false, false), true));
+        // Canonicalize the XML with the same parameters that ZATCA uses
+        $canonicalXml = $clonedXml->getElement()->C14N(false, false);
+        
+        // Calculate the hash of the canonical XML
+        return base64_encode(hash('sha256', $canonicalXml, true));
     }
 
     /**
