@@ -25,10 +25,9 @@ class InvoiceSigner
      * @param string      $xmlInvoice  Invoice XML as a string
      * @param Certificate $certificate Certificate for signing
      * @param bool        $isSimplified Whether this is a simplified invoice
-     * @param array       $invoiceData  Additional invoice data (optional)
      * @return self
      */
-    public static function signInvoice(string $xmlInvoice, Certificate $certificate, bool $isSimplified = false, array $invoiceData = []): self
+    public static function signInvoice(string $xmlInvoice, Certificate $certificate, bool $isSimplified = false): self
     {
         $instance = new self();
         $instance->certificate = $certificate;
